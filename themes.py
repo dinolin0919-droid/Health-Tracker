@@ -146,6 +146,12 @@ html, body, .stApp, .stApp p, .stApp label, .stApp li, .stApp span, .stApp div, 
 [data-testid="stRadioOption"][data-selected="true"] p, [data-testid="stRadioOption"]:has(input:checked) p,
 .stRadio label[data-baseweb="radio"]:has(input:checked) p {{ color: var(--on-primary) !important; font-weight: 700; }}
 [data-testid="stRadioOption"]:hover {{ border-color: var(--primary); }}
+/* 滑桿 */
+[data-testid="stSlider"] [role="slider"], [data-testid="stSlider"] div:has(> div > input[type="range"]) {{
+  background: var(--primary) !important; border-color: var(--primary) !important; box-shadow: none !important; }}
+[data-testid="stSlider"] [data-testid="stSliderThumbValue"], [data-testid="stSlider"] [data-testid="stThumbValue"] {{
+  color: var(--primary) !important; }}
+[data-testid="stSlider"] [data-testid="stSliderTickBar"] {{ color: var(--muted); }}
 /* 外框、展開區、表單 */
 [data-testid="stForm"] {{ border: 1px solid var(--line); border-radius: var(--r); background: transparent; }}
 [data-testid="stExpander"] details {{ border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }}

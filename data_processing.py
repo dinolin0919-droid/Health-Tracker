@@ -165,6 +165,36 @@ def meal_kcal(meals: dict, base_tdee: float) -> float:
     return sum(base_tdee * MEAL_SHARE[m] * MEAL_MULT[lv] for m, lv in meals.items())
 
 
+def suggest_meals(target_kcal: float, base: float) -> tuple[dict, float]:
+    """用快速記錄的份量組出最接近 target_kcal 的三餐，回傳 ({餐別: 等級}, 大卡)。
+    偏好：正餐盡量不要「沒吃」、少用「大餐」，點心可以不吃。"""
+    import itertools
+    best, best_score = None, 1e18
+    for combo in itertools.product(MEAL_LEVELS, repeat=len(MEAL_NAMES)):
+        meals = dict(zip(MEAL_NAMES, combo))
+        kcal = meal_kcal(meals, base)
+        score = abs(kcal - target_kcal)
+        score += sum(150 for m, lv in meals.items() if m != "點心" and lv == "沒吃")
+        score += sum(60 for lv in combo if lv == "大餐")
+        score += 80 if meals["點心"] in ("多", "大餐") else 0              # 點心不建議吃多
+        score += 20 * len({lv for m, lv in meals.items() if m != "點心"})   # 三餐份量越一致越好記
+        if score < best_score:
+            best, best_score = meals, score
+    return best, meal_kcal(best, base)
+
+
+def top_foods(um: UserManager, username: str, days: int = 14, n: int = 5) -> list[tuple[str, float, float]]:
+    """最近 days 天「詳細記錄」裡熱量最高的食物：[(名稱, 總大卡, 每份大卡)]"""
+    table, _ = load_tables(um)
+    start = (date.today() - timedelta(days=days)).isoformat()
+    total = {}
+    for r in um.get_records(username, start=start):
+        for f, q in r.foods.items():
+            if f in table:
+                total[f] = total.get(f, 0) + table[f][0] * q
+    return [(f, kc, table[f][0]) for f, kc in sorted(total.items(), key=lambda x: -x[1])[:n]]
+
+
 def base_tdee(um: UserManager, username: str, day: str) -> float:
     """「平常一天吃多少」的起始估計：BMR × 活動係數（不含運動）"""
     p = um.get_profile(username)

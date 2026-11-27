@@ -168,6 +168,25 @@ def today_tab(user, rows):
         f'<div class="card {t}"><div class="lab">{a}</div><div class="val">{b}</div><div class="sub">{c}</div></div>'
         for (a, b, c), t in zip(cards, tone)) + "</div>", unsafe_allow_html=True)
 
+    plan = um.get_profile(user).plan
+    if plan and plan.get("end", "") >= today:
+        rec_target = plan.get("recorded", plan["intake"])
+        done = eat or 0
+        pct = min(100, done / rec_target * 100) if rec_target else 0
+        left = rec_target - done
+        meals_txt = "・".join(f"{m} {lv}" for m, lv in (plan.get("meals") or {}).items())
+        days_left = (date.fromisoformat(plan["end"]) - date.today()).days
+        st.markdown(
+            f'<div class="card" style="margin-bottom:1rem"><div class="lab">我的計畫：{plan["end"][5:].replace("-", "/")} '
+            f'到 {plan["target"]:g} kg（還有 {days_left} 天）</div>'
+            f'<div style="height:10px;border-radius:99px;background:var(--line);margin:8px 0 6px;overflow:hidden">'
+            f'<div style="width:{pct:.0f}%;height:100%;background:{"var(--primary)" if left >= 0 else "var(--bad)"}"></div></div>'
+            f'<div class="sub" style="font-size:.85rem;color:var(--ink)">今天記錄 {done:,.0f} / 目標 {rec_target:,.0f} 大卡・'
+            f'{"還可以吃 " + format(left, ",.0f") if left >= 0 else "超過 " + format(-left, ",.0f")} 大卡'
+            + (f'<br>建議三餐：{meals_txt}' if meals_txt else "")
+            + (f'・運動約 {plan.get("exercise", 0):,.0f} 大卡' if plan.get("exercise") else "")
+            + "</div></div>", unsafe_allow_html=True)
+
     # 體重
     st.subheader("體重")
     with st.form("weight", border=False):
@@ -183,8 +202,9 @@ def today_tab(user, rows):
     st.subheader("三餐")
     with st.form("meals", border=False):
         choice = {}
+        plan_meals = (plan or {}).get("meals") or {} if plan and plan.get("end", "") >= today else {}
         for m in MEAL_NAMES:
-            default = rec.meals.get(m, "沒吃" if m == "點心" else "普通")
+            default = rec.meals.get(m) or plan_meals.get(m) or ("沒吃" if m == "點心" else "普通")
             choice[m] = st.radio(m, MEAL_LEVELS, index=MEAL_LEVELS.index(default),
                                  horizontal=True, key=f"meal_{m}")
         c1, c2 = st.columns(2)
@@ -350,6 +370,100 @@ def trend_tab(user, rows):
         mae = sorted(((v, MODEL_LABEL[k]) for k, v in hc["mae"].items() if v is not None))
         st.write("平均誤差（越小越準）：" + "、".join(f"**{n}** {v:.2f} kg" for v, n in mae))
         st.caption("用這段期間實際記錄的飲食（校正後）去重演，跟量到的體重比較。")
+
+
+# ───────────────────────── 目標規劃 ─────────────────────────
+def plan_tab(user, rows):
+    prof = um.get_profile(user)
+    w_now = um.latest_weight(user)
+    st.caption("輸入「幾週後想變幾公斤」，用三個模型反推每天該吃多少，換算成三餐份量。")
+    c1, c2 = st.columns(2)
+    default_target = prof.goal_weight_kg or round(w_now - 3, 1)
+    target = c1.number_input("目標體重（kg）", 30.0, 250.0, float(default_target), 0.5, key="plan_target")
+    weeks = c2.number_input("幾週後達成", 1, 104, 12, 1, key="plan_weeks")
+    walk = st.select_slider("每天打算快走幾分鐘", options=[0, 10, 20, 30, 45, 60, 90], value=0,
+                            format_func=lambda m: "不運動" if m == 0 else f"{m} 分鐘", key="plan_walk")
+    ex_kcal = dp.exercise_kcal(dp.EXERCISE_MET["快走"], w_now, walk)
+    try:
+        p = ad.plan_for_goal(um, user, target, int(weeks) * 7, ex_kcal)
+    except ValueError as e:
+        st.warning(str(e))
+        return
+    base = dp.base_tdee(um, user, date.today().isoformat())
+    meals, meals_kcal = dp.suggest_meals(p["recorded"], base)
+    change = p["target"] - p["w0"]
+
+    cards = [("每天可以吃", f"{p['intake']:,.0f}", f"維持體重約 {p['maintenance']:,.0f}，"
+              + (f"少 {p['deficit']:,.0f}" if p['deficit'] >= 0 else f"多 {-p['deficit']:,.0f}")),
+             ("記錄時大約", f"{p['recorded']:,.0f}", f"已依你的記錄習慣 ×{p['factor']:.2f} 換算" if p["factor"]
+              else "資料夠了會依記錄習慣換算"),
+             ("每週變化", f"{p['weekly']:+.2f}", "kg／週"),
+             ("達成日", p["end"][5:].replace("-", "/"), f"{p['w0']:.1f} → {p['target']:.1f} kg")]
+    st.markdown('<div class="cards">' + "".join(
+        f'<div class="card"><div class="lab">{a}</div><div class="val">{b}</div><div class="sub">{c}</div></div>'
+        for a, b, c in cards) + "</div>", unsafe_allow_html=True)
+
+    for w in p["warnings"]:
+        st.warning(w)
+    if p["safe_days"]:
+        safe_w = (p["safe_days"] + 6) // 7
+        st.info(f"比較安全的做法：把期限拉長到 **{safe_w} 週**（{(date.today() + timedelta(days=safe_w * 7)):%m/%d}）。")
+
+    st.subheader("三餐這樣點")
+    pills = "".join(f'<span style="display:inline-block;margin:3px 6px 3px 0;padding:6px 14px;border-radius:999px;'
+                    f'background:{"var(--primary)" if lv not in ("沒吃",) else "var(--surface)"};'
+                    f'color:{"var(--on-primary)" if lv != "沒吃" else "var(--muted)"};font-weight:700">{m}・{lv}</span>'
+                    for m, lv in meals.items())
+    st.markdown(pills, unsafe_allow_html=True)
+    st.caption(f"用「今天」分頁的快速記錄這樣點，約 {meals_kcal:,.0f} 大卡（記錄值）。"
+               "份量是跟你「平常一餐」比，不用很精準，體重會幫你校正。")
+    tips = [f"蛋白質每天約 {p['target'] * 1.2:.0f}–{p['target'] * 1.6:.0f} g（每餐一個手掌大的肉、魚、蛋或豆腐），減重時比較不會掉肌肉。"]
+    if walk:
+        tips.append(f"每天快走 {walk} 分鐘，約消耗 {ex_kcal:,.0f} 大卡，所以可以多吃這麼多。")
+    elif change < 0:
+        extra = dp.exercise_kcal(dp.EXERCISE_MET["快走"], w_now, 30)
+        tips.append(f"如果每天快走 30 分鐘（約 {extra:,.0f} 大卡），每天就可以多吃差不多這麼多。")
+    tops = dp.top_foods(um, user)
+    if tops and change < 0:
+        tips.append("最近熱量最高的食物：" + "、".join(f"{f}（每份 {per:,.0f}）" for f, _, per in tops[:3])
+                    + "，從這些下手最有感。")
+    st.markdown("\n".join(f"- {t}" for t in tips))
+
+    st.subheader("照計畫走的話")
+    hist = [r for r in rows if r["date"] >= (date.today() - timedelta(days=60)).isoformat()]
+    recs = [{"日期": r["date"], "體重": r["weight_clean"], "線": "實際體重"} for r in hist if r["weight_clean"]]
+    recs += [{"日期": d, "體重": w, "線": "照計畫"} for d, w in zip(p["dates"], p["plan_series"])]
+    if p["current_series"]:
+        recs += [{"日期": d, "體重": w, "線": "照現在的吃法"} for d, w in zip(p["dates"], p["current_series"])]
+    df = pd.DataFrame(recs)
+    df["日期"] = pd.to_datetime(df["日期"])
+    t = th.get(THEME)
+    dom = ["實際體重", "照計畫", "照現在的吃法"]
+    rng = [t["chart"]["實際體重"], t["primary"], t["muted"]]
+    color = alt.Color("線:N", scale=alt.Scale(domain=dom, range=rng), legend=alt.Legend(orient="bottom", title=None))
+    x = alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d"))
+    y = alt.Y("體重:Q", scale=alt.Scale(zero=False), title="kg")
+    base_c = alt.Chart(df)
+    show_chart(alt.layer(
+        base_c.transform_filter(alt.datum.線 == "實際體重").mark_circle(size=28).encode(x, y, color),
+        base_c.transform_filter(alt.datum.線 == "照計畫").mark_line(strokeWidth=4).encode(x, y, color),
+        base_c.transform_filter(alt.datum.線 == "照現在的吃法").mark_line(strokeWidth=2, strokeDash=[6, 3]).encode(x, y, color),
+        alt.Chart(pd.DataFrame({"目標": [p["target"]]})).mark_rule(color=t["accent"], strokeDash=[2, 4]).encode(y="目標:Q"),
+    ).properties(height=300))
+    if p["current_series"]:
+        st.caption(f"照最近 14 天的吃法（每天約 {p['current_intake']:,.0f} 大卡），{int(weeks)} 週後大約 "
+                   f"{p['current_series'][-1]:.1f} kg。")
+
+    if st.button("設為我的計畫", type="primary", **WIDE):
+        um.update_profile(user, goal_weight_kg=round(p["target"], 1), plan={
+            "target": round(p["target"], 1), "start": p["start"], "end": p["end"],
+            "intake": round(p["intake"]), "recorded": round(p["recorded"]),
+            "exercise": round(ex_kcal), "meals": meals})
+        flash(f"已設定計畫：{p['end'][5:].replace('-', '/')} 到 {p['target']:g} kg。「今天」分頁會顯示每天的進度。")
+        st.rerun()
+    if prof.plan:
+        st.caption(f"目前的計畫：{prof.plan['end']} 到 {prof.plan['target']:g} kg，每天記錄約 "
+                   f"{prof.plan.get('recorded', prof.plan['intake']):,.0f} 大卡。")
 
 
 # ───────────────────────── 準確度（D 組）─────────────────────────
@@ -561,18 +675,20 @@ def main():
     st.markdown(th.hero("熱量帳本", f"{p.display_name}・{date.today():%Y/%m/%d}"), unsafe_allow_html=True)
     show_flash()
     rows = dataset(user)
-    tabs = st.tabs(["今天", "趨勢與預測", "準確度", "紀錄", "資料品質", "設定"])
+    tabs = st.tabs(["今天", "目標規劃", "趨勢與預測", "準確度", "紀錄", "資料品質", "設定"])
     with tabs[0]:
         today_tab(user, rows)
     with tabs[1]:
-        trend_tab(user, rows)
+        plan_tab(user, rows)
     with tabs[2]:
-        accuracy_tab(user)
+        trend_tab(user, rows)
     with tabs[3]:
-        records_tab(user, rows)
+        accuracy_tab(user)
     with tabs[4]:
-        quality_tab(user, rows)
+        records_tab(user, rows)
     with tabs[5]:
+        quality_tab(user, rows)
+    with tabs[6]:
         settings_tab(user)
 
 

@@ -114,6 +114,7 @@ class UserProfile:
     goal_weight_kg: float | None = None
     registered_at: str = field(default_factory=_now)
     theme: str = "fresh"          # app 的外觀：fresh / warm / dark / cute（見 themes.py）
+    plan: dict | None = None      # 目標規劃：{"target", "start", "end", "intake", "recorded", "exercise", "meals"}
 
     @classmethod
     def from_dict(cls, d: dict) -> "UserProfile":
@@ -140,6 +141,11 @@ class UserProfile:
         self.goal_weight_kg = _check_range("目標體重", self.goal_weight_kg, 25, 300, allow_none=True)
         if self.activity_level not in ACTIVITY_LEVELS:
             raise ValidationError("活動量要是 1～4")
+        if self.plan is not None:
+            if not isinstance(self.plan, dict) or not {"target", "end", "intake"} <= set(self.plan):
+                raise ValidationError("計畫格式不對")
+            _check_range("計畫目標體重", self.plan["target"], 25, 300)
+            _check_date("計畫結束日", self.plan["end"])
         if self.theme not in THEME_KEYS:
             raise ValidationError(f"外觀要是 {'、'.join(THEME_KEYS)} 其中之一")
         self.display_name = (self.display_name or self.username).strip()[:30]

@@ -226,6 +226,83 @@ def weighted_forecast(um, username: str, days: int = 84, method: str = "inverse_
     return fc
 
 
+# ───────────────────────── 目標規劃：幾週後想變幾公斤，要吃多少 ─────────────────────────
+def _solve(f, target: float, lo: float = 0.0, hi: float = 9000.0) -> float:
+    """f(攝取) 隨攝取增加而變重；用二分法找出 f(攝取) = target 的攝取量"""
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        if f(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def plan_for_goal(um, username: str, target_kg: float, days: int, exercise: float = 0.0) -> dict:
+    """反推：從現在的體重開始，days 天後剛好到 target_kg，每天要吃多少（真實攝取）。
+
+    用三個模型的加權預測（權重同 current_weights），所以會考慮變瘦後消耗變少。
+    回傳的 recorded 是換算成「記錄的熱量」：真實攝取 ÷ 校正係數（沒有係數就一樣）。
+    """
+    if days < 7:
+        raise ValueError("至少要 1 週")
+    rows = dp.build_dataset(um, username)
+    body = pm.body_of(um, username)
+    smooth = [r for r in rows if r["weight_smooth"] is not None]
+    w0 = smooth[-1]["weight_smooth"] if smooth else um.latest_weight(username)
+    weights, info = current_weights(um, username)
+    ex = [exercise] * days
+
+    def end_weight(ei):
+        return sum(weights[m] * pm.MODELS[m](w0, [ei] * days, ex, body)[-1] for m in MODELS)
+
+    def series(ei, exercise_per_day=exercise):
+        runs = {m: pm.MODELS[m](w0, [ei] * days, [exercise_per_day] * days, body) for m in MODELS}
+        return [sum(weights[m] * runs[m][i] for m in MODELS) for i in range(days + 1)]
+
+    intake = _solve(end_weight, target_kg)
+    maintenance = _solve(end_weight, w0)                  # 吃這麼多會維持現在的體重
+    k = next((r["intake_factor"] for r in reversed(rows) if r["intake_factor"]), None)
+    avg_ei, avg_ex = pm.recent_averages(rows)
+    start = date.today()
+    change = target_kg - w0
+    weekly = change / days * 7
+    floor = 1500 if body.sex == "男" else 1200
+    warnings = []
+    if change < 0 and -weekly > w0 * 0.01:
+        warnings.append(f"每週要減 {-weekly:.2f} kg，超過體重的 1%，太快了，容易流失肌肉、也很難維持。")
+    if change > 0 and weekly > 0.5:
+        warnings.append(f"每週要增加 {weekly:.2f} kg，太快了，多出來的大多會是脂肪。")
+    if intake < floor:
+        warnings.append(f"每天只能吃 {intake:,.0f} 大卡，低於建議下限 {floor:,} 大卡。")
+    elif intake < body.rmr(w0):
+        warnings.append(f"每天攝取 {intake:,.0f} 大卡，比你的基礎代謝 {body.rmr(w0):,.0f} 還低，長期不容易維持。")
+    safe_days = None
+    if warnings and change < 0:
+        safe_days = int(math.ceil(-change / (w0 * 0.01) * 7))
+        while safe_days < 730:
+            ei = _solve(lambda x: sum(weights[m] * pm.MODELS[m](w0, [x] * safe_days, [exercise] * safe_days,
+                                                                body)[-1] for m in MODELS), target_kg)
+            if ei >= max(floor, body.rmr(w0) * 0.95):
+                break
+            safe_days += 7
+    elif warnings and change > 0:
+        safe_days = int(math.ceil(change / 0.5 * 7))
+
+    return {
+        "w0": w0, "target": target_kg, "days": days, "exercise": exercise,
+        "start": start.isoformat(), "end": (start + timedelta(days=days)).isoformat(),
+        "intake": intake, "maintenance": maintenance, "deficit": maintenance - intake,
+        "factor": k, "recorded": intake / k if k else intake,
+        "weekly": weekly, "warnings": warnings, "safe_days": safe_days, "floor": floor,
+        "plan_series": series(intake),
+        "current_intake": avg_ei, "current_exercise": avg_ex,
+        "current_series": series(avg_ei, avg_ex) if avg_ei is not None else None,
+        "weights": weights, "weights_info": info,
+        "dates": [(start + timedelta(days=i)).isoformat() for i in range(days + 1)],
+    }
+
+
 # ───────────────────────── 文字報告 ─────────────────────────
 def print_report(um, username: str, horizon: int = 14):
     res = evaluate(um, username, horizon)
