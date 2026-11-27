@@ -48,6 +48,7 @@ ACTIVITY_LEVELS = {          # 日常活動量 → 活動係數（算 TDEE 用�
     4: ("高度（重體力工作）", 1.725),
 }
 SEXES = ("男", "女")
+THEME_KEYS = ("fresh", "warm", "dark", "cute")
 MEAL_NAMES = ("早餐", "午餐", "晚餐", "點心")
 MEAL_LEVELS = ("沒吃", "少", "普通", "多", "大餐")   # 快速記錄用，熱量換算在 B 模組
 PBKDF2_ROUNDS = 200_000
@@ -112,6 +113,12 @@ class UserProfile:
     activity_level: int = 1       # 1～4，見 ACTIVITY_LEVELS
     goal_weight_kg: float | None = None
     registered_at: str = field(default_factory=_now)
+    theme: str = "fresh"          # app 的外觀：fresh / warm / dark / cute（見 themes.py）
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UserProfile":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
     @property
     def age(self) -> int:
@@ -133,6 +140,8 @@ class UserProfile:
         self.goal_weight_kg = _check_range("目標體重", self.goal_weight_kg, 25, 300, allow_none=True)
         if self.activity_level not in ACTIVITY_LEVELS:
             raise ValidationError("活動量要是 1～4")
+        if self.theme not in THEME_KEYS:
+            raise ValidationError(f"外觀要是 {'、'.join(THEME_KEYS)} 其中之一")
         self.display_name = (self.display_name or self.username).strip()[:30]
         return self
 
@@ -480,7 +489,7 @@ class UserManager:
         doc = self._load(name)
         doc["login_history"] = ([_now()] + doc.get("login_history", []))[:100]
         self._save(name, doc)
-        return UserProfile(**doc["profile"])
+        return UserProfile.from_dict(doc["profile"])
 
     def change_password(self, username: str, old: str, new: str):
         acc = self._account(username)
@@ -510,7 +519,7 @@ class UserManager:
 
     # ── 個人資料 ──
     def get_profile(self, username: str) -> UserProfile:
-        return UserProfile(**self._load(username)["profile"])
+        return UserProfile.from_dict(self._load(username)["profile"])
 
     def update_profile(self, username: str, /, **changes) -> UserProfile:
         """例：update_profile("dino", height_cm=176, goal_weight_kg=65)"""
@@ -519,7 +528,7 @@ class UserManager:
         unknown = set(changes) - {f.name for f in fields(UserProfile)}
         if unknown or locked & set(changes):
             raise ValidationError(f"不能修改的欄位：{', '.join(sorted(unknown | (locked & set(changes))))}")
-        profile = UserProfile(**{**doc["profile"], **changes}).validate()
+        profile = UserProfile.from_dict({**doc["profile"], **changes}).validate()
         doc["profile"] = asdict(profile)
         self._save(username, doc)
         return profile

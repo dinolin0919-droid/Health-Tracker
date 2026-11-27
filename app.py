@@ -13,13 +13,20 @@ E｜介面：把 A（使用者管理）、B（資料處理）、C（預測模型
 from __future__ import annotations
 
 import os
+import time
 from datetime import date, timedelta
+
+# 主機在美國，統一用台灣時間，不然早上記的資料會算到前一天（可以用環境變數 APP_TZ 改）
+os.environ["TZ"] = os.environ.get("APP_TZ", "Asia/Taipei")
+if hasattr(time, "tzset"):
+    time.tzset()
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 import adaptive as ad
+import themes as th
 import data_processing as dp
 import prediction_models as pm
 from user_management import (ACTIVITY_LEVELS, MEAL_LEVELS, MEAL_NAMES, DailyRecord,
@@ -39,22 +46,27 @@ except Exception:
 _NEW = tuple(int(x) for x in st.__version__.split(".")[:2]) >= (1, 46)
 WIDE = {"width": "stretch"} if _NEW else {"use_container_width": True}
 
-COLORS = {"實際體重": "#1f1f1f", "7 天平均": "#8a8a8a",
-          "Wishnofsky": "#d1495b", "Antonetti": "#edae49", "Hall": "#00798c",
-          "加權預測": "#5b3fa0"}
 MODEL_LABEL = {"wishnofsky": "Wishnofsky", "antonetti": "Antonetti", "hall": "Hall"}
+THEME = th.DEFAULT          # 目前畫面用的外觀，登入後換成使用者選的
 
-st.markdown("""<style>
-.block-container {padding-top: 2rem; padding-bottom: 4rem;}
-div[data-testid="stMetricValue"] {font-size: 1.6rem;}
-div[role="radiogroup"] {gap: 0.2rem 0.8rem;}
-.cards {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0.2rem 0 0.8rem;}
-.card {border: 1px solid rgba(128,128,128,.28); border-radius: 10px; padding: 10px 12px;}
-.card .lab {font-size: .85rem; opacity: .75;}
-.card .val {font-size: 1.55rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums;}
-.card .sub {font-size: .75rem; opacity: .65;}
-@media (max-width: 640px) {.cards {grid-template-columns: repeat(2, minmax(0, 1fr));}}
-</style>""", unsafe_allow_html=True)
+
+def colors() -> dict:
+    return th.get(THEME)["chart"]
+
+
+def apply_theme(key: str | None):
+    global THEME
+    THEME = key if key in th.THEMES else th.DEFAULT
+    st.markdown(th.css(THEME), unsafe_allow_html=True)
+
+
+def show_chart(chart):
+    st.altair_chart(th.style_chart(chart, THEME), **WIDE)
+
+
+def show_table(rows, num_cols=None, highlight=None):
+    st.markdown(th.table(rows, num_cols, highlight), unsafe_allow_html=True)
+
 
 um = UserManager(os.environ.get("KCAL_DATA_DIR"), cache=True)   # 測試時可以指定別的資料夾
 
@@ -80,8 +92,9 @@ def dataset(user) -> list[dict]:
 
 # ───────────────────────── 登入、註冊 ─────────────────────────
 def login_page():
-    st.title("熱量帳本")
-    st.caption("每天量體重、隨手記三餐，讓體重變化幫你校正，預測接下來會怎麼走。")
+    apply_theme(st.session_state.get("theme"))
+    st.markdown(th.hero("熱量帳本", "每天量體重、隨手記三餐，讓體重變化幫你校正，預測接下來會怎麼走。"),
+                unsafe_allow_html=True)
     t1, t2 = st.tabs(["登入", "註冊"])
     with t1:
         with st.form("login"):
@@ -150,9 +163,10 @@ def today_tab(user, rows):
              ("今天消耗", fmt(tdee), "BMR × 活動係數 + 運動"),
              ("收支", fmt(bal, digits=0) if bal is None else f"{bal:+,.0f}",
               "赤字，會瘦" if bal is not None and bal < 0 else ("盈餘" if bal is not None else "記了三餐才算"))]
+    tone = ["", "", "", "good" if bal is not None and bal < 0 else ("bad" if bal is not None else "")]
     st.markdown('<div class="cards">' + "".join(
-        f'<div class="card"><div class="lab">{a}</div><div class="val">{b}</div><div class="sub">{c}</div></div>'
-        for a, b, c in cards) + "</div>", unsafe_allow_html=True)
+        f'<div class="card {t}"><div class="lab">{a}</div><div class="val">{b}</div><div class="sub">{c}</div></div>'
+        for (a, b, c), t in zip(cards, tone)) + "</div>", unsafe_allow_html=True)
 
     # 體重
     st.subheader("體重")
@@ -262,8 +276,9 @@ def trend_tab(user, rows):
     recs += [{"日期": d, "體重": w, "線": "加權預測"} for d, w in zip(fc["dates"], fc["weighted"])]
     df = pd.DataFrame(recs)
     df["日期"] = pd.to_datetime(df["日期"])
-    order = [n for n in COLORS if n in set(df["線"])]
-    color = alt.Color("線:N", scale=alt.Scale(domain=order, range=[COLORS[n] for n in order]),
+    C = colors()
+    order = [n for n in C if n in set(df["線"])]
+    color = alt.Color("線:N", scale=alt.Scale(domain=order, range=[C[n] for n in order]),
                       legend=alt.Legend(orient="bottom", title=None, columns=3))
     lo, hi = df["體重"].min(), df["體重"].max()
     if prof.goal_weight_kg:
@@ -280,8 +295,8 @@ def trend_tab(user, rows):
     ]
     if prof.goal_weight_kg:
         layers.append(alt.Chart(pd.DataFrame({"目標": [prof.goal_weight_kg]}))
-                      .mark_rule(color="#00798c", strokeDash=[2, 4]).encode(y="目標:Q"))
-    st.altair_chart(alt.layer(*layers).properties(height=340), **WIDE)
+                      .mark_rule(color=th.get(THEME)["accent"], strokeDash=[2, 4]).encode(y="目標:Q"))
+    show_chart(alt.layer(*layers).properties(height=340))
 
     src = {"recent": "最近 14 天平均（校正後）", "custom": "自己設定", "maintenance": "維持體重的熱量"}
     st.caption(f"從 {fc['w0']:.1f} kg 開始，每天吃 {fc['intake']:,.0f}、運動 {fc['exercise']:,.0f} 大卡"
@@ -300,7 +315,7 @@ def trend_tab(user, rows):
                       "變化": f"{end - fc['w0']:+.1f} kg",
                       "到達目標": (f"{(date.today() + timedelta(days=reach)):%m/%d}（{reach} 天）"
                                if reach else "預測期間內不會")})
-    st.dataframe(pd.DataFrame(table), hide_index=True, **WIDE)
+    show_table(table, highlight="加權預測")
     with st.expander("三個模型有什麼不同？"):
         st.markdown(
             "- **Wishnofsky**：最簡單，7,700 大卡 = 1 公斤，假設消耗不變，所以時間越長越會高估減重。\n"
@@ -328,10 +343,10 @@ def trend_tab(user, rows):
         d2 = pd.DataFrame(recs)
         d2["日期"] = pd.to_datetime(d2["日期"])
         b2 = alt.Chart(d2)
-        st.altair_chart(alt.layer(
+        show_chart(alt.layer(
             b2.transform_filter(alt.datum.線 == "實際體重").mark_circle(size=28).encode(x, alt.Y("體重:Q", scale=alt.Scale(zero=False), title="kg"), color),
             b2.transform_filter(alt.datum.線 != "實際體重").mark_line(strokeWidth=2).encode(x, alt.Y("體重:Q", scale=alt.Scale(zero=False)), color),
-        ).properties(height=280), **WIDE)
+        ).properties(height=280))
         mae = sorted(((v, MODEL_LABEL[k]) for k, v in hc["mae"].items() if v is not None))
         st.write("平均誤差（越小越準）：" + "、".join(f"**{n}** {v:.2f} kg" for v, n in mae))
         st.caption("用這段期間實際記錄的飲食（校正後）去重演，跟量到的體重比較。")
@@ -352,9 +367,10 @@ def accuracy_tab(user):
                for k, v in models.items()]
         out += [{"預測方式": "加權：" + ad.METHODS[k], "MAE": v["mae"], "RMSE": v["rmse"], "偏差": v["bias"]}
                 for k, v in methods.items()]
-        df = pd.DataFrame(out).sort_values("MAE")
-        st.dataframe(df.style.format({"MAE": "{:.2f}", "RMSE": "{:.2f}", "偏差": "{:+.2f}"}),
-                     hide_index=True, **WIDE)
+        out.sort(key=lambda r: r["MAE"])
+        show_table([{"預測方式": r["預測方式"], "MAE": f"{r['MAE']:.2f}", "RMSE": f"{r['RMSE']:.2f}",
+                     "偏差": f"{r['偏差']:+.2f}"} for r in out],
+                   num_cols={"MAE", "RMSE", "偏差"}, highlight=out[0]["預測方式"])
 
     st.subheader("跟量到的體重比")
     table(res["models"], res["methods"])
@@ -368,13 +384,13 @@ def accuracy_tab(user):
     wdf = pd.DataFrame([{"日期": h["origin"], "模型": MODEL_LABEL[m], "權重": h["weights"]["inverse_mse"][m]}
                         for h in res["history"] for m in ad.MODELS])
     wdf["日期"] = pd.to_datetime(wdf["日期"])
-    st.altair_chart(alt.Chart(wdf).mark_area().encode(
+    show_chart(alt.Chart(wdf).mark_area().encode(
         alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d")),
         alt.Y("權重:Q", stack="normalize", axis=alt.Axis(format="%"), title=None),
         alt.Color("模型:N", scale=alt.Scale(domain=list(MODEL_LABEL.values()),
-                                          range=[COLORS[n] for n in MODEL_LABEL.values()]),
+                                          range=[colors()[n] for n in MODEL_LABEL.values()]),
                   legend=alt.Legend(orient="bottom", title=None, columns=3)),
-    ).properties(height=220), **WIDE)
+    ).properties(height=220))
 
 
 # ───────────────────────── 紀錄 ─────────────────────────
@@ -382,12 +398,20 @@ def records_tab(user, rows):
     cols = {"date": "日期", "weight_kg": "體重", "weight_smooth": "7天平均", "intake_kcal": "攝取",
             "intake_corrected": "校正後", "exercise_kcal": "運動", "tdee_formula": "消耗",
             "balance_kcal": "收支", "steps": "步數", "intake_method": "方式"}
-    df = pd.DataFrame(rows[::-1])
-    if df.empty:
+    if not rows:
         st.info("還沒有紀錄")
         return
-    st.dataframe(df[list(cols)].rename(columns=cols).head(90), hide_index=True, **WIDE)
-    st.caption(f"顯示最近 90 天，共 {len(df)} 天")
+    method = {"foods": "清單", "meals": "快速", "mixed": "混合", "manual": "手動", None: "—"}
+
+    def f(v, d=0):
+        return "—" if v is None else f"{v:,.{d}f}"
+    show_table([{"日期": r["date"][5:].replace("-", "/"), "體重": f(r["weight_kg"], 1),
+                 "7天平均": f(r["weight_smooth"], 1), "攝取": f(r["intake_kcal"]),
+                 "校正後": f(r["intake_corrected"]), "運動": f(r["exercise_kcal"]),
+                 "消耗": f(r["tdee_formula"]), "收支": f(r["balance_kcal"]), "步數": f(r["steps"]),
+                 "方式": method.get(r["intake_method"], "—")} for r in rows[::-1][:90]],
+               num_cols={"體重", "7天平均", "攝取", "校正後", "運動", "消耗", "收支", "步數"})
+    st.caption(f"顯示最近 90 天，共 {len(rows)} 天")
     full = pd.DataFrame(rows)[list(dp.COLUMNS)]
     st.download_button("下載全部（CSV，Excel 可開）", full.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"{user}_熱量帳本.csv", mime="text/csv", **WIDE)
@@ -396,10 +420,10 @@ def records_tab(user, rows):
 # ───────────────────────── 資料品質 ─────────────────────────
 def quality_tab(user, rows):
     q = dp.quality_report(rows)
-    c = st.columns(3)
-    c[0].metric("紀錄天數", q["days"])
-    c[1].metric("可給模型用", q["usable"])
-    c[2].metric("有量體重", q["weight_days"])
+    st.markdown('<div class="cards" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + "".join(
+        f'<div class="card"><div class="lab">{a}</div><div class="val">{b}</div></div>'
+        for a, b in (("紀錄天數", q["days"]), ("可給模型用", q["usable"]), ("有量體重", q["weight_days"])))
+        + "</div>", unsafe_allow_html=True)
     k = q["latest_factor"]
     st.subheader("校正係數")
     if k is None:
@@ -414,14 +438,13 @@ def quality_tab(user, rows):
             st.write(f"依體重變化，實際攝取大約比記錄少 **{1 - k:.0%}**（可能記多了，或實際消耗比公式高）。")
         ks = pd.DataFrame([{"日期": r["date"], "校正係數": r["intake_factor"]} for r in rows if r["intake_factor"]])
         ks["日期"] = pd.to_datetime(ks["日期"])
-        st.altair_chart(alt.Chart(ks).mark_line(color="#00798c").encode(
+        show_chart(alt.Chart(ks).mark_line(color=th.get(THEME)["primary"], strokeWidth=2.5).encode(
             alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d")),
-            alt.Y("校正係數:Q", scale=alt.Scale(zero=False))).properties(height=180), **WIDE)
+            alt.Y("校正係數:Q", scale=alt.Scale(zero=False))).properties(height=180))
     if q["flags"]:
         st.subheader("資料問題")
-        st.dataframe(pd.DataFrame([{"問題": dp.FLAG_TEXT.get(f, f), "天數": n}
-                                   for f, n in sorted(q["flags"].items(), key=lambda x: -x[1])]),
-                     hide_index=True, **WIDE)
+        show_table([{"問題": dp.FLAG_TEXT.get(f, f), "天數": n}
+                    for f, n in sorted(q["flags"].items(), key=lambda x: -x[1])], num_cols={"天數"})
     if q["usable"] < 14 or q["weight_days"] < 7:
         st.warning("至少要 2 週的飲食紀錄、7 次以上的體重，分析才比較有意義。")
 
@@ -429,6 +452,18 @@ def quality_tab(user, rows):
 # ───────────────────────── 設定 ─────────────────────────
 def settings_tab(user):
     p = um.get_profile(user)
+    st.subheader("外觀")
+    st.markdown(th.swatches(p.theme), unsafe_allow_html=True)
+    keys = list(th.THEMES)
+    pick = st.radio("選擇風格", keys, index=keys.index(p.theme) if p.theme in keys else 0, horizontal=True,
+                    format_func=lambda k: th.THEMES[k]["name"], key="theme_pick",
+                    label_visibility="collapsed")
+    if pick != p.theme:
+        um.update_profile(user, theme=pick)
+        st.session_state["theme"] = pick
+        flash(f"已換成「{th.THEMES[pick]['name']}」")
+        st.rerun()
+    st.subheader("個人資料")
     st.write(f"**{p.display_name}**（{p.sex}，{p.age} 歲）・註冊於 {p.registered_at[:10]}")
     with st.form("profile"):
         c1, c2 = st.columns(2)
@@ -521,8 +556,9 @@ def main():
         login_page()
         return
     p = um.get_profile(user)
-    st.title("熱量帳本")
-    st.caption(f"{p.display_name}・{date.today():%Y/%m/%d}")
+    st.session_state["theme"] = p.theme          # 登出後登入頁也維持同一個風格
+    apply_theme(p.theme)
+    st.markdown(th.hero("熱量帳本", f"{p.display_name}・{date.today():%Y/%m/%d}"), unsafe_allow_html=True)
     show_flash()
     rows = dataset(user)
     tabs = st.tabs(["今天", "趨勢與預測", "準確度", "紀錄", "資料品質", "設定"])

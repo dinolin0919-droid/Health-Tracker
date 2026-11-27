@@ -12,7 +12,7 @@
 | B 資料處理 | `data_processing.py`、`read_health.py` | 熱量換算、快速記錄、資料清理、體重校正、匯入 iPhone 健康 app |
 | C 預測模型 | `prediction_models.py` | Wishnofsky（1958）、Antonetti 型（1973）、Hall 簡化版（2011） |
 | D 自適應學習 | `adaptive.py` | 滾動回測、模型權重、準確度評估 |
-| E 介面 | `app.py` | Streamlit 網頁 app |
+| E 介面 | `app.py`、`themes.py` | Streamlit 網頁 app、四種外觀主題（使用者在「設定 → 外觀」自己選） |
 | 其他 | `simulate_data.py` | 產生模擬資料（`demo` 帳號） |
 | | `migrate_to_cloud.py` | 把電腦上的帳號複製到雲端 |
 | | `test_*.py` | 自動測試：`python -m unittest discover` |
@@ -44,9 +44,10 @@ streamlit run app.py
      updated_at timestamptz not null default now()
    );
    alter table public.kv enable row level security;
+   grant select, insert, update, delete on table public.kv to service_role;
    ```
 
-   最後一行會鎖住這張表，只有持有 secret key 的伺服器（也就是你的 app）能讀寫。
+   `enable row level security` 會鎖住這張表，最後一行再只開放給 secret key（也就是你的 app），所以公開的 publishable key 讀不到任何資料。
 
 3. 左邊點 **Project Settings → API Keys**，記下兩個東西：
    - **Project URL**：像 `https://abcdefgh.supabase.co`（在 Data API 或 Project Settings 的頁面上）
@@ -58,7 +59,7 @@ streamlit run app.py
 2. 在新的 repository 頁面按 **uploading an existing file**，把下面這些檔案拖進去，再按 **Commit changes**：
 
    ```
-   app.py  user_management.py  data_processing.py  read_health.py
+   app.py  themes.py  user_management.py  data_processing.py  read_health.py
    prediction_models.py  adaptive.py  simulate_data.py  migrate_to_cloud.py
    requirements.txt  README.md
    ```
