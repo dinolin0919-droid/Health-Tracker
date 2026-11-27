@@ -295,6 +295,7 @@ class SupabaseStorage:
         create table public.kv (key text primary key, value jsonb not null,
                                 updated_at timestamptz not null default now());
         alter table public.kv enable row level security;
+        grant select, insert, update, delete on table public.kv to service_role;
     金鑰用 secret key（sb_secret_...），只放在伺服器端（Streamlit 的 Secrets），使用者看不到。
     """
 
@@ -303,6 +304,11 @@ class SupabaseStorage:
         from urllib.parse import urlparse
         u = urlparse(url.strip())                   # 只留 https://xxxx.supabase.co，多貼的 /rest/v1 等路徑去掉
         self.base = f"{u.scheme}://{u.netloc}/rest/v1/{table}"
+        key = key.strip().strip('"').strip("“”").strip()   # 多貼的空白、換行、引號去掉
+        # 出錯時給人看的金鑰「外觀」（不含金鑰本身）：開頭、長度、有沒有怪字元
+        odd = sorted({c for c in key if not (c.isascii() and (c.isalnum() or c in "_-."))})
+        self.key_info = (f"金鑰開頭 {key[:10]}…，長度 {len(key)}（秘密金鑰應該是 41）"
+                         + (f"，含有不該有的字元 {odd}" if odd else ""))
         self.http = session or requests.Session()
         self.http.headers.update({"apikey": key, "Authorization": f"Bearer {key}",
                                   "Content-Type": "application/json"})
@@ -318,8 +324,11 @@ class SupabaseStorage:
                      "PGRST106": "找不到 kv 表，請到 Supabase 的 SQL Editor 執行建表指令（見 README.md）",
                      "42P01": "找不到 kv 表，請到 Supabase 的 SQL Editor 執行建表指令（見 README.md）"}
             hint = next((v for k, v in hints.items() if k in r.text), "")
-            if r.status_code in (401, 403) and not hint:
-                hint = "金鑰不對：SUPABASE_KEY 要用 sb_secret_ 開頭的那把"
+            if "42501" in r.text and "service_role" in r.text:
+                hint = ("秘密金鑰還沒有 kv 表的權限，請到 SQL Editor 執行："
+                        "grant select, insert, update, delete on table public.kv to service_role;")
+            elif r.status_code in (401, 403) and not hint:
+                hint = f"金鑰不對：SUPABASE_KEY 要用 sb_secret_ 開頭的那把；{self.key_info}"
             raise StorageError(f"雲端資料庫錯誤 {r.status_code}" + (f"（{hint}）" if hint else "")
                                + f"：{r.text[:200]}")
         return r
