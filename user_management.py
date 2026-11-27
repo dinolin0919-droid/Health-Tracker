@@ -300,7 +300,9 @@ class SupabaseStorage:
 
     def __init__(self, url: str, key: str, table: str = "kv", session=None):
         import requests
-        self.base = url.rstrip("/") + f"/rest/v1/{table}"
+        from urllib.parse import urlparse
+        u = urlparse(url.strip())                   # 只留 https://xxxx.supabase.co，多貼的 /rest/v1 等路徑去掉
+        self.base = f"{u.scheme}://{u.netloc}/rest/v1/{table}"
         self.http = session or requests.Session()
         self.http.headers.update({"apikey": key, "Authorization": f"Bearer {key}",
                                   "Content-Type": "application/json"})
@@ -311,7 +313,15 @@ class SupabaseStorage:
         except Exception as e:
             raise StorageError(f"連不上雲端資料庫：{e}") from None
         if r.status_code >= 400:
-            raise StorageError(f"雲端資料庫錯誤 {r.status_code}：{r.text[:200]}")
+            hints = {"PGRST125": "SUPABASE_URL 只要到 .supabase.co 為止",
+                     "PGRST205": "找不到 kv 表，請到 Supabase 的 SQL Editor 執行建表指令（見 README.md）",
+                     "PGRST106": "找不到 kv 表，請到 Supabase 的 SQL Editor 執行建表指令（見 README.md）",
+                     "42P01": "找不到 kv 表，請到 Supabase 的 SQL Editor 執行建表指令（見 README.md）"}
+            hint = next((v for k, v in hints.items() if k in r.text), "")
+            if r.status_code in (401, 403) and not hint:
+                hint = "金鑰不對：SUPABASE_KEY 要用 sb_secret_ 開頭的那把"
+            raise StorageError(f"雲端資料庫錯誤 {r.status_code}" + (f"（{hint}）" if hint else "")
+                               + f"：{r.text[:200]}")
         return r
 
     def get(self, key: str):
@@ -344,6 +354,9 @@ def cloud_storage_from_secrets(folder: str | None = None) -> "SupabaseStorage":
     if not (url and key):
         raise StorageError("找不到雲端設定：請設定 SUPABASE_URL、SUPABASE_KEY，"
                            "或建立 .streamlit/secrets.toml（見 README.md）")
+    if not url.startswith("https://") or "貼上" in url or "貼上" in key:
+        raise StorageError(".streamlit/secrets.toml 還沒填好：把引號裡的文字換成 Supabase 的 "
+                           "Project URL（https:// 開頭）和 sb_secret_ 開頭的金鑰")
     return SupabaseStorage(url, key)
 
 

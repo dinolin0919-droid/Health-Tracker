@@ -100,6 +100,8 @@ def login_page():
         st.caption("隱私：資料存在雲端資料庫（伺服器在美國），密碼經過加密雜湊，"
                    "只有登入的本人看得到自己的紀錄；可以隨時在「設定」刪除帳號和所有資料。"
                    "這是學生專題，請不要當成醫療建議。")
+    elif os.path.abspath(__file__).startswith("/mount/src"):    # 在 Streamlit Cloud 上，但沒設 Secrets
+        st.warning("管理者還沒設定雲端資料庫（Secrets），現在註冊的資料在主機重開後會消失。")
     else:
         st.caption("資料存在這台電腦的 data 資料夾。")
     with t2:
